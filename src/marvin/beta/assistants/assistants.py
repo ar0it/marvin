@@ -64,6 +64,7 @@ class Assistant(BaseModel, ExposeSyncMethodsMixin):
     tools: list[Union[AssistantTool, Callable]] = []
     tool_resources: dict[str, Any] = {}
     metadata: dict[str, str] = {}
+    max_completion_tokens: Optional[int] = None,
     # context level tracks nested assistant contexts
     _context_level: int = PrivateAttr(0)
 
@@ -105,6 +106,7 @@ class Assistant(BaseModel, ExposeSyncMethodsMixin):
         file_search_files: Optional[list[str]] = None,
         thread: Optional[Thread] = None,
         event_handler_class: type[AsyncAssistantEventHandler] = NOT_PROVIDED,
+        max_completion_tokens: Optional[int] = None,
         **run_kwargs,
     ) -> "Run":
         thread = thread or self.default_thread
@@ -127,6 +129,7 @@ class Assistant(BaseModel, ExposeSyncMethodsMixin):
             assistant=self,
             thread=thread,
             event_handler_class=event_handler_class,
+            max_completion_tokens=max_completion_tokens or self.max_completion_tokens,
             **run_kwargs,
         )
         result = await run.run_async()

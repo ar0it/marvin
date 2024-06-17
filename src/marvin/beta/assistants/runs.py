@@ -67,6 +67,7 @@ class Run(BaseModel, ExposeSyncMethodsMixin):
         None,
         description="Additional tools to append to the assistant's tools. ",
     )
+    max_completion_tokens: Optional[int] = None,
     run: OpenAIRun = Field(None, repr=False)
     data: Any = None
 
@@ -144,6 +145,11 @@ class Run(BaseModel, ExposeSyncMethodsMixin):
             tools.extend(self.additional_tools)
         return tools
 
+    def _get_remaining_tokens(self) -> int:
+        if self.run is None:
+            return self.max_completion_tokens
+        return self.max_completion_tokens - self.run.usage.completion_tokens
+    
     def _get_run_kwargs(self, thread: Thread = None, **run_kwargs) -> dict:
         if instructions := self._get_instructions(thread=thread):
             run_kwargs["instructions"] = instructions
@@ -153,6 +159,9 @@ class Run(BaseModel, ExposeSyncMethodsMixin):
 
         if model := self._get_model():
             run_kwargs["model"] = model
+
+        if remaining_tokens := self._get_remaining_tokens():
+            run_kwargs["max_completion_tokens"] = remaining_tokens
 
         return run_kwargs
 
@@ -224,12 +233,13 @@ class Run(BaseModel, ExposeSyncMethodsMixin):
                 ) as stream:
                     await stream.until_done()
                     await self._update_run_from_handler(handler)
+                
+                max_iterations = 2  # How many attempts at fixing the tool call are allowed
+                iteration_count = 0
 
-                while handler.current_run.status in ["requires_action"]:
+                while handler.current_run.status in ["requires_action"] and iteration_count <= max_iterations:
                     tool_outputs = await self.get_tool_outputs(run=handler.current_run)
-
                     handler = event_handler_class(**self.event_handler_kwargs)
-
                     async with client.beta.threads.runs.submit_tool_outputs_stream(
                         thread_id=self.thread.id,
                         run_id=self.run.id,
@@ -238,6 +248,10 @@ class Run(BaseModel, ExposeSyncMethodsMixin):
                     ) as stream:
                         await stream.until_done()
                         await self._update_run_from_handler(handler)
+                    iteration_count += 1  # Increment the counter
+
+                if iteration_count >= max_iterations:
+                    logger.debug("Maximum iterations reached, stoping tool output submission.")
 
             except EndRun as exc:
                 logger.debug(f"`EndRun` raised; ending run with data: {exc.data}")
@@ -252,6 +266,7 @@ class Run(BaseModel, ExposeSyncMethodsMixin):
             except Exception as exc:
                 await handler.on_exception(exc)
                 raise
+
 
             if self.run.status == "failed":
                 logger.debug(
